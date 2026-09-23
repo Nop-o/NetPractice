@@ -192,6 +192,105 @@ Chez vous, votre box Internet a une IP privée (ex. `192.168.1.1`) qu'elle attri
 
 ---
 
+## Sous-réseaux (Subnetting)
+
+Le **sous-adressage** (subnetting) consiste à découper un réseau en plusieurs réseaux plus petits, appelés **sous-réseaux**, en "empruntant" des bits à la partie hôte pour les ajouter à la partie réseau. Cela permet d'organiser un grand réseau en segments plus petits et isolés (un par service, par étage, par lien entre routeurs, etc.), au lieu de gaspiller des centaines d'adresses sur un seul réseau plat.
+
+- Chaque fois qu'on **allonge le masque d'un bit** (ex. `/24` → `/25`), on **divise le réseau en deux** sous-réseaux de taille moitié.
+- Chaque sous-réseau garde toujours sa propre **adresse réseau** (première adresse) et sa propre **adresse de broadcast** (dernière adresse), qui restent réservées et ne peuvent pas être attribuées à un hôte.
+- Le nombre d'hôtes utilisables se calcule avec la formule : **2^(bits hôte) − 2** (les −2 correspondent à l'adresse réseau et à l'adresse de broadcast).
+
+---
+
+### Table de référence (à partir d'un bloc /24)
+
+| Masque | Bits hôte | Nb de sous-réseaux (depuis /24) | Nb d'hôtes utilisables par sous-réseau |
+|---|---|---|---|
+| /24 | 8 | 1 | 254 |
+| /25 | 7 | 2 | 126 |
+| /26 | 6 | 4 | 62 |
+| /27 | 5 | 8 | 30 |
+| /28 | 4 | 16 | 14 |
+| /29 | 3 | 32 | 6 |
+| /30 | 2 | 64 | 2 |
+
+Le `/30` est très utilisé pour les **liens point-à-point** entre deux routeurs, car on n'a besoin que de 2 adresses (une par routeur), pas plus.
+
+---
+
+### Exemple pas à pas : découper 192.168.1.0/24
+
+Partons du réseau `192.168.1.0/24` (256 adresses, de `.0` à `.255`) et découpons-le progressivement.
+
+**Étape 1 — Passage en /25 (on emprunte 1 bit) :**
+On divise le réseau en 2 blocs de 128 adresses chacun :
+
+| Sous-réseau | Adresse réseau | Plage utilisable | Broadcast |
+|---|---|---|---|
+| Bloc 1 | `192.168.1.0/25` | `.1` à `.126` | `.127` |
+| Bloc 2 | `192.168.1.128/25` | `.129` à `.254` | `.255` |
+
+**Étape 2 — On redécoupe le Bloc 2 en /26 (on emprunte 1 bit de plus) :**
+On divise `192.168.1.128/25` en 2 blocs de 64 adresses :
+
+| Sous-réseau | Adresse réseau | Plage utilisable | Broadcast |
+|---|---|---|---|
+| Bloc 2a | `192.168.1.128/26` | `.129` à `.190` | `.191` |
+| Bloc 2b | `192.168.1.192/26` | `.193` à `.254` | `.255` |
+
+**Étape 3 — On redécoupe le Bloc 2a en /30 (lien point-à-point) :**
+On divise `192.168.1.128/26` en blocs de 4 adresses (dont 2 utilisables) :
+
+| Sous-réseau | Adresse réseau | Plage utilisable | Broadcast |
+|---|---|---|---|
+| Bloc 2a-1 | `192.168.1.128/30` | `.129` et `.130` | `.131` |
+| Bloc 2a-2 | `192.168.1.132/30` | `.133` et `.134` | `.135` |
+| ... | ... | ... | ... |
+
+On voit ici la logique : chaque sous-réseau est **totalement indépendant et non chevauchant** — c'est la règle absolue à respecter.
+
+---
+
+### La règle à ne jamais casser : pas de chevauchement
+
+Deux sous-réseaux ne doivent **jamais** partager une même adresse. Si un sous-réseau `/25` couvre `192.168.1.128` à `192.168.1.255`, alors **aucun** autre sous-réseau ne doit utiliser une adresse dans cette plage — même avec un masque différent.
+
+**Exemple d'erreur fréquente :**
+- Sous-réseau A : `108.198.14.128/25` → couvre `.128` à `.255`
+- Sous-réseau B : `108.198.14.192/26` → couvre `.192` à `.255`
+
+Ces deux sous-réseaux **se chevauchent** : le `/26` est entièrement contenu à l'intérieur du `/25`. Un appareil dans le `/25` verra donc les adresses du `/26` comme faisant partie de son propre réseau local (puisque son masque est plus large), ce qui casse le routage : le routeur ne saura pas s'il doit traiter ces adresses comme locales ou les faire suivre vers un autre routeur.
+
+**Comment corriger :** il faut que chaque sous-réseau ait une plage bien à lui, sans intersection. Par exemple, utiliser un `/30` dédié pour le lien point-à-point (2 adresses seulement) plutôt qu'un `/25` beaucoup trop large, afin de laisser la place au `/26` sans conflit :
+- Lien point-à-point : `108.198.14.0/30` (`.1` et `.2` utilisables)
+- Sous-réseau C : `108.198.14.192/26` (`.193` à `.254` utilisables)
+
+Ici, aucune adresse n'est partagée entre les deux blocs : la configuration est valide.
+
+---
+
+### Méthode rapide pour trouver la plage d'un sous-réseau
+
+1. **Trouver le "saut" (bloc de taille)** : `256 − (dernier octet du masque décimal)`.
+   *Exemple : masque `255.255.255.192` → 256 − 192 = **64**. Les sous-réseaux commencent donc tous les 64 : `.0`, `.64`, `.128`, `.192`.*
+2. **Repérer dans quel bloc tombe l'adresse IP donnée** (le multiple de 64 juste en dessous ou égal).
+3. **Adresse réseau** = ce multiple. **Broadcast** = (multiple suivant − 1). **Plage utilisable** = tout ce qu'il y a entre les deux.
+
+**Exemple :** Pour l'IP `108.198.14.251` avec un masque `/26` (`255.255.255.192`, saut de 64) :
+- Multiples de 64 : `.0, .64, .128, .192, .256(=.0 octet suivant)`
+- `251` tombe entre `.192` et `.255` → adresse réseau = `108.198.14.192`, broadcast = `108.198.14.255`
+- Plage utilisable = `108.198.14.193` à `108.198.14.254`
+
+---
+
+### Points clés à retenir
+
+1. Allonger le masque d'un bit **divise le réseau en deux** — c'est la base de tout découpage en sous-réseaux.
+2. Chaque sous-réseau a sa **propre** adresse réseau et sa **propre** adresse de broadcast, non attribuables à un hôte.
+3. **Deux sous-réseaux ne doivent jamais se chevaucher**, même avec des masques différents — c'est l'erreur la plus fréquente dans les exercices de type NetPractice.
+4. Pour un lien entre deux routeurs (point-à-point), un `/30` (2 adresses utilisables) est largement suffisant et évite de gaspiller un bloc plus grand.
+5. Avant de valider un schéma, toujours vérifier que la **plage complète** de chaque sous-réseau (adresse réseau → broadcast) ne recoupe **aucune** plage d'un autre sous-réseau du schéma.
+
 ## Résumé visuel d'un exemple complet
 
 Pour le réseau `192.168.1.0/24` :
